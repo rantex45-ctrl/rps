@@ -3,11 +3,15 @@
 ------------------------------------------------------------------
 امکانات:
   1) بازی تکی در برابر خود بات (فوری)
-  2) چالش با یک دوست: هرکس توی پیوی خودش انتخابش رو می‌زنه، نتیجه
-     وقتی هر دو انتخاب کردن هم‌زمان اعلام می‌شه.
-  3) امتیازها (برد/باخت/مساوی هر کاربر) توی یک فایل SQLite ذخیره
+  2) چالش با یک دوست از طریق لینک: هرکس توی پیوی خودش انتخابش رو
+     می‌زنه، نتیجه وقتی هر دو انتخاب کردن هم‌زمان اعلام می‌شه.
+  3) بازی مستقیم داخل یه گروه (/duel): بات رو به گروه اضافه کن،
+     دستور /duel رو بفرست، هر دو بازیکن روی همون پیامِ توی همون گروه
+     دکمه‌هاشون رو می‌زنن — نیازی به رفتن به پیوی جدا نیست. انتخاب هر
+     نفر فقط با یه popup خصوصی به خودش نشون داده می‌شه.
+  4) امتیازها (برد/باخت/مساوی هر کاربر) توی یک فایل SQLite ذخیره
      می‌شن و با ری‌استارت شدن بات از بین نمی‌رن.
-  4) پنل ادمین (/admin): آمار کلی ربات + ارسال پیام همگانی به همه
+  5) پنل ادمین (/admin): آمار کلی ربات + ارسال پیام همگانی به همه
      کاربرهایی که تا حالا با بات استارت زدن.
 
 نحوه‌ی اجرا:
@@ -63,10 +67,22 @@ CHOICES = {
 
 DUELS: dict[str, dict] = {}
 
+# چالش‌های داخل یک گروه/چت مشترک: هر دو بازیکن روی همون پیامِ توی همون چت
+# دکمه می‌زنن، به‌جای اینکه هرکدوم بره توی پیوی جدا با بات.
+# هر آیتم: {chat_id, message_id, p1_id, p1_name, p2_id, p2_name, p1_choice, p2_choice}
+GDUELS: dict[str, dict] = {}
+
 
 # ------------------------------------------------------------------ DB ------
 
 def db():
+    # اگه پوشه‌ی مقصد (مثلاً /data برای Volume توی Railway) وجود نداشته باشه،
+    # sqlite3.connect با خطای "unable to open database file" کرش می‌کنه.
+    # این خط اون پوشه رو در صورت نبودن می‌سازه تا این مشکل پیش نیاد.
+    parent_dir = os.path.dirname(DB_PATH)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -180,8 +196,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(
         "سنگ، کاغذ، قیچی 🪨📄✂️\n"
-        "می‌تونی همین‌جا با خود من بازی کنی، یا یه لینک چالش برای یه دوست بفرستی "
-        "و هرکدومتون توی پیوی خودتون انتخاب کنید. امتیازهات ذخیره می‌مونه.",
+        "می‌تونی همین‌جا با خود من بازی کنی، یا یه لینک چالش برای یه دوست بفرستی. "
+        "امتیازهات ذخیره می‌مونه.\n\n"
+        "برای بازی مستقیم توی یه گروه (بدون رفتن به پیوی جدا)، من رو به گروه اضافه کن "
+        "و دستور /duel رو همون‌جا بفرست — بازی کاملاً روی همون پیامِ توی گروه انجام می‌شه.",
         reply_markup=keyboard,
     )
 
@@ -341,6 +359,144 @@ async def duel_play(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
     del DUELS[code]
 
 
+# --------------------------------------------------- بازی داخل خود گپ -------
+
+async def group_duel_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دستور /duel — یه بازی باز می‌سازه که مستقیم روی همون پیامِ توی همین چت انجام می‌شه."""
+    user = update.effective_user
+    chat = update.effective_chat
+    upsert_user(user.id, chat.id, user.first_name)
+
+    if chat.type == "private":
+        await update.message.reply_text(
+            "این دستور برای بازی داخل یه گروهه. من رو به یه گروه اضافه کن و همون‌جا /duel رو بزن، "
+            "یا از دکمه‌ی «چالش با یک دوست» بالا برای بازی دو نفره‌ی جداگانه استفاده کن."
+        )
+        return
+
+    code = uuid.uuid4().hex[:8]
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🤜🤛 پیوستن به بازی", callback_data=f"gduel:{code}:join")]])
+    msg = await update.message.reply_text(
+        f"{user.first_name} یه بازی سنگ‌کاغذقیچی شروع کرد. کی حاضره باهاش بازی کنه؟",
+        reply_markup=keyboard,
+    )
+
+    GDUELS[code] = {
+        "chat_id": chat.id, "message_id": msg.message_id,
+        "p1_id": user.id, "p1_name": user.first_name,
+        "p2_id": None, "p2_name": None,
+        "p1_choice": None, "p2_choice": None,
+    }
+
+
+async def group_duel_join(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+    query = update.callback_query
+    duel = GDUELS.get(code)
+    user = query.from_user
+
+    if duel is None:
+        await query.answer("این بازی دیگه فعال نیست.", show_alert=True)
+        return
+    if user.id == duel["p1_id"]:
+        await query.answer("این بازی خودته — باید یه نفر دیگه بپیونده 🙂", show_alert=True)
+        return
+    if duel["p2_id"] is not None:
+        await query.answer("این بازی قبلاً پر شده.", show_alert=True)
+        return
+
+    upsert_user(user.id, query.message.chat_id, user.first_name)
+    duel["p2_id"] = user.id
+    duel["p2_name"] = user.first_name
+
+    await query.answer("پیوستی! انتخابتو بزن.")
+    await query.edit_message_text(
+        f"{duel['p1_name']} 🆚 {duel['p2_name']}\n"
+        f"هر دو نفر مخفیانه انتخابتون رو بزنید — نتیجه وقتی هر دو زدید نشون داده می‌شه:",
+        reply_markup=choice_keyboard(f"gduel:{code}"),
+    )
+
+
+async def group_duel_play(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str, choice: str):
+    query = update.callback_query
+    duel = GDUELS.get(code)
+    user_id = query.from_user.id
+
+    if duel is None:
+        await query.answer("این بازی دیگه فعال نیست.", show_alert=True)
+        return
+
+    if user_id == duel["p1_id"]:
+        role, other_role = "p1", "p2"
+    elif user_id == duel["p2_id"]:
+        role, other_role = "p2", "p1"
+    else:
+        await query.answer("این بازی برای تو نیست.", show_alert=True)
+        return
+
+    if duel[f"{role}_choice"] is not None:
+        await query.answer("قبلاً انتخاب کردی، منتظر حریفت باش.")
+        return
+
+    duel[f"{role}_choice"] = choice
+    # انتخاب فقط به‌صورت popup خصوصی به خودش نشون داده می‌شه — بقیه‌ی گروه نمی‌بینن
+    await query.answer(f"انتخاب کردی: {CHOICES[choice]['emoji']} {CHOICES[choice]['label']}")
+
+    if duel[f"{other_role}_choice"] is None:
+        await query.edit_message_text(
+            f"{duel['p1_name']} 🆚 {duel['p2_name']}\n"
+            f"⏳ یک بازیکن انتخاب کرد. منتظر بازیکن دیگه‌ایم…",
+            reply_markup=choice_keyboard(f"gduel:{code}"),
+        )
+        return
+
+    p1_choice, p2_choice = duel["p1_choice"], duel["p2_choice"]
+    result_for_p1 = judge(p1_choice, p2_choice)
+
+    record_result(duel["p1_id"], result_for_p1)
+    record_result(duel["p2_id"], "tie" if result_for_p1 == "tie" else ("win" if result_for_p1 == "lose" else "lose"))
+    bump_games_played()
+
+    if result_for_p1 == "tie":
+        body = f"هر دو {CHOICES[p1_choice]['emoji']} {CHOICES[p1_choice]['label']} زدید — مساوی شد."
+    else:
+        winner_name, winner_choice = (duel["p1_name"], p1_choice) if result_for_p1 == "win" else (duel["p2_name"], p2_choice)
+        loser_choice = p2_choice if result_for_p1 == "win" else p1_choice
+        body = (f"{CHOICES[winner_choice]['emoji']} {CHOICES[winner_choice]['label']} می‌بره "
+                f"{CHOICES[loser_choice]['emoji']} {CHOICES[loser_choice]['label']} رو\n"
+                f"🏆 {winner_name} برد!")
+
+    text = (f"{duel['p1_name']}: {CHOICES[p1_choice]['emoji']} {CHOICES[p1_choice]['label']}\n"
+            f"{duel['p2_name']}: {CHOICES[p2_choice]['emoji']} {CHOICES[p2_choice]['label']}\n\n"
+            f"{body}")
+
+    rematch_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔁 بازی جدید", callback_data="gduel:new")]])
+    await query.edit_message_text(text, reply_markup=rematch_kb)
+
+    del GDUELS[code]
+
+
+async def group_duel_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دکمه‌ی «بازی جدید» بعد از پایان یه دوئل گروهی — یه چالش تازه می‌سازه."""
+    query = update.callback_query
+    user = query.from_user
+    chat = query.message.chat
+    upsert_user(user.id, chat.id, user.first_name)
+    await query.answer()
+
+    code = uuid.uuid4().hex[:8]
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🤜🤛 پیوستن به بازی", callback_data=f"gduel:{code}:join")]])
+    await query.edit_message_text(
+        f"{user.first_name} یه بازی سنگ‌کاغذقیچی شروع کرد. کی حاضره باهاش بازی کنه؟",
+        reply_markup=keyboard,
+    )
+    GDUELS[code] = {
+        "chat_id": chat.id, "message_id": query.message.message_id,
+        "p1_id": user.id, "p1_name": user.first_name,
+        "p2_id": None, "p2_name": None,
+        "p1_choice": None, "p2_choice": None,
+    }
+
+
 # ------------------------------------------------------------ پنل ادمین ----
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -418,6 +574,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("duel:"):
         _, code, choice = data.split(":", 2)
         await duel_play(update, context, code, choice)
+    elif data == "gduel:new":
+        await group_duel_new(update, context)
+    elif data.startswith("gduel:"):
+        _, code, action = data.split(":", 2)
+        if action == "join":
+            await group_duel_join(update, context, code)
+        else:
+            await group_duel_play(update, context, code, action)
     elif data == "stats:me":
         await update.callback_query.answer()
         await update.callback_query.edit_message_text(stats_line(update.callback_query.from_user.id))
@@ -438,6 +602,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("duel", group_duel_start))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
     app.add_handler(CallbackQueryHandler(on_callback))
