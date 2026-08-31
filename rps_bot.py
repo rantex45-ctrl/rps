@@ -50,8 +50,8 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("rps-bot")
 
-TOKEN = os.environ.get("TOKEN", "PUT-YOUR-TOKEN-HERE")
-ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+TOKEN = os.environ.get("TOKEN", "8978449695:AAEk6E4HdlBo_uHt0HFzzjmJSjlMadfJv3Y")
+ADMIN_IDS = {int(x) for x in os.environ.get("7689823397", "").split(",") if x.strip().isdigit()}
 DB_PATH = os.environ.get("DB_PATH", "rps.db")
 
 # به‌جای ایموجی دست، از خودِ عناصر بازی استفاده می‌کنیم
