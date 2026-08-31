@@ -51,7 +51,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("rps-bot")
 
 TOKEN = os.environ.get("TOKEN", "8978449695:AAH-UC8RwuX2NuM_sP9u7ZbHGsCAliTyF74")
-ADMIN_IDS = {int(x) for x in os.environ.get("7689823397", "").split(",") if x.strip().isdigit()}
+ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "7689823397").split(",") if x.strip().isdigit()}
 DB_PATH = os.environ.get("DB_PATH", "rps.db")
 
 # به‌جای ایموجی دست، از خودِ عناصر بازی استفاده می‌کنیم
