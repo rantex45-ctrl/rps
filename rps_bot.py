@@ -5,23 +5,29 @@
   1) بازی تکی در برابر خود بات (فوری)
   2) چالش با یک دوست از طریق لینک: هرکس توی پیوی خودش انتخابش رو
      می‌زنه، نتیجه وقتی هر دو انتخاب کردن هم‌زمان اعلام می‌شه.
-  3) بازی مستقیم داخل یه گروه (/duel): بات رو به گروه اضافه کن،
-     دستور /duel رو بفرست، هر دو بازیکن روی همون پیامِ توی همون گروه
-     دکمه‌هاشون رو می‌زنن — نیازی به رفتن به پیوی جدا نیست. انتخاب هر
-     نفر فقط با یه popup خصوصی به خودش نشون داده می‌شه.
-  4) امتیازها (برد/باخت/مساوی هر کاربر) توی یک فایل SQLite ذخیره
+  3) بازی مستقیم داخل هر چتی از طریق حالت اینلاین: کافیه توی هر چتی
+     (خصوصی، گروه، حتی چت با یه مخاطب دیگه) بنویسی @یوزرنیم_بات و
+     نتیجه رو بفرستی — بازی همون‌جا شروع می‌شه، بدون نیاز به اضافه کردن
+     بات به گروه. (نیاز به فعال‌سازی یک‌باره‌ی /setinline توی BotFather)
+  4) بازی مستقیم داخل یه گروه با دستور /duel (برای وقتی که بات از قبل
+     عضو گروهه): هر دو بازیکن روی همون پیامِ توی همون گروه دکمه‌هاشون
+     رو می‌زنن.
+  5) امتیازها (برد/باخت/مساوی هر کاربر) توی یک فایل SQLite ذخیره
      می‌شن و با ری‌استارت شدن بات از بین نمی‌رن.
-  5) پنل ادمین (/admin): آمار کلی ربات + ارسال پیام همگانی به همه
+  6) پنل ادمین (/admin): آمار کلی ربات + ارسال پیام همگانی به همه
      کاربرهایی که تا حالا با بات استارت زدن.
 
 نحوه‌ی اجرا:
   1) از @BotFather یه بات بساز و توکنش رو بگیر.
-  2) آیدی عددی خودت رو از یه بات مثل @userinfobot بگیر.
-  3) pip install -r requirements.txt
-  4) متغیرهای محیطی رو ست کن:
+  2) همون‌جا توی BotFather دستور /setinline رو بزن، بات رو انتخاب کن و
+     یه متن جای‌گیر کوتاه وارد کن (مثلاً «برای شروع بازی بنویس...»).
+     بدون این مرحله، تایپ @یوزرنیم_بات توی چت‌ها هیچ نتیجه‌ای نمی‌ده.
+  3) آیدی عددی خودت رو از یه بات مثل @userinfobot بگیر.
+  4) pip install -r requirements.txt
+  5) متغیرهای محیطی رو ست کن:
         export TOKEN="123456:ABC-your-token"
         export ADMIN_IDS="111111,222222"     # آیدی عددی ادمین‌ها، با کاما جدا
-  5) python rps_bot.py
+  6) python rps_bot.py
 
 نکته: این اسکریپت باید مدام روی یه سرور/وی‌پی‌اس (یا Railway/Render/
 PythonAnywhere always-on) در حال اجرا بمونه؛ با بسته‌شدن اسکریپت بات
@@ -41,11 +47,14 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
 )
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    InlineQueryHandler,
     MessageHandler,
     ContextTypes,
     filters,
@@ -198,8 +207,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "سنگ، کاغذ، قیچی 🪨📄✂️\n"
         "می‌تونی همین‌جا با خود من بازی کنی، یا یه لینک چالش برای یه دوست بفرستی. "
         "امتیازهات ذخیره می‌مونه.\n\n"
-        "برای بازی مستقیم توی یه گروه (بدون رفتن به پیوی جدا)، من رو به گروه اضافه کن "
-        "و دستور /duel رو همون‌جا بفرست — بازی کاملاً روی همون پیامِ توی گروه انجام می‌شه.",
+        "برای بازی مستقیم توی هر چتی (خصوصی یا گروه)، کافیه همون‌جا بنویسی "
+        f"@{(await context.bot.get_me()).username} و نتیجه رو بفرستی — بازی همون‌جا شروع می‌شه.",
         reply_markup=keyboard,
     )
 
@@ -497,6 +506,41 @@ async def group_duel_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
 
+# --------------------------------------------------------- حالت اینلاین ----
+
+async def on_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    وقتی کاربر توی هر چتی (خصوصی/گروه/حتی چت با یه مخاطب دیگه) بنویسه
+    @یوزرنیم_بات، همین نتیجه پیشنهاد می‌شه. با فرستادنش، پیام مستقیم توی
+    همون چت ساخته می‌شه و بازی از همون‌جا (بدون نیاز به اضافه کردن بات
+    به گروه) شروع می‌شه.
+    نکته: برای فعال شدن این قابلیت باید یک‌بار توی @BotFather دستور
+    /setinline رو برای این بات بزنی و یه متن جای‌گیر (placeholder) ست کنی.
+    """
+    user = update.inline_query.from_user
+    upsert_user(user.id, user.id, user.first_name)
+
+    code = uuid.uuid4().hex[:8]
+    GDUELS[code] = {
+        "chat_id": None, "message_id": None,
+        "p1_id": user.id, "p1_name": user.first_name,
+        "p2_id": None, "p2_name": None,
+        "p1_choice": None, "p2_choice": None,
+    }
+
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🤜🤛 پیوستن به بازی", callback_data=f"gduel:{code}:join")]])
+    result = InlineQueryResultArticle(
+        id=code,
+        title="شروع بازی سنگ‌کاغذقیچی 🪨📄✂️",
+        description="این نتیجه رو بفرست تا بازی همین‌جا شروع بشه",
+        input_message_content=InputTextMessageContent(
+            f"{user.first_name} یه بازی سنگ‌کاغذقیچی شروع کرد. کی حاضره باهاش بازی کنه؟"
+        ),
+        reply_markup=keyboard,
+    )
+    await update.inline_query.answer([result], cache_time=0, is_personal=True)
+
+
 # ------------------------------------------------------------ پنل ادمین ----
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -606,6 +650,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("cancel", cancel_broadcast))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(InlineQueryHandler(on_inline_query))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_text))
 
     log.info("بات در حال اجراست…")
