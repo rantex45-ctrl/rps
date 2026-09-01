@@ -413,7 +413,10 @@ async def group_duel_join(update: Update, context: ContextTypes.DEFAULT_TYPE, co
         await query.answer("این بازی قبلاً پر شده.", show_alert=True)
         return
 
-    upsert_user(user.id, query.message.chat_id, user.first_name)
+    # پیام‌های ساخته‌شده از طریق حالت اینلاین، chat/message معمولی ندارن
+    # (فقط inline_message_id) — پس برای این حالت از آیدی خود کاربر به‌جای chat_id استفاده می‌کنیم.
+    fallback_chat_id = query.message.chat_id if query.message else user.id
+    upsert_user(user.id, fallback_chat_id, user.first_name)
     duel["p2_id"] = user.id
     duel["p2_name"] = user.first_name
 
@@ -488,8 +491,9 @@ async def group_duel_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دکمه‌ی «بازی جدید» بعد از پایان یه دوئل گروهی — یه چالش تازه می‌سازه."""
     query = update.callback_query
     user = query.from_user
-    chat = query.message.chat
-    upsert_user(user.id, chat.id, user.first_name)
+    # این دکمه هم ممکنه روی یه پیام اینلاین باشه که chat واقعی نداره
+    fallback_chat_id = query.message.chat_id if query.message else user.id
+    upsert_user(user.id, fallback_chat_id, user.first_name)
     await query.answer()
 
     code = uuid.uuid4().hex[:8]
@@ -499,7 +503,7 @@ async def group_duel_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
     )
     GDUELS[code] = {
-        "chat_id": chat.id, "message_id": query.message.message_id,
+        "chat_id": fallback_chat_id, "message_id": query.message.message_id if query.message else None,
         "p1_id": user.id, "p1_name": user.first_name,
         "p2_id": None, "p2_name": None,
         "p1_choice": None, "p2_choice": None,
